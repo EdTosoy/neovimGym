@@ -48,82 +48,139 @@ function M.start()
   vim.opt_local.buftype = "nofile"
 end
 
--- Level 1: The Crawler (Arcade Mode)
+-- Level 1: The Crawler (Gamified Arcade)
 function M.level_crawler()
+  -- Game State
   local score = 0
+  local combo = 1
+  local combo_timer = 0
   local time_limit = 30
   local start_time = os.time()
   local running = true
-
+  
+  -- Visual Assets
+  local targets = {"👾", "👻", "👹", "🤖", "👽"}
+  local colors = {"#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff"}
+  
+  -- Setup Highlights
+  vim.api.nvim_set_hl(0, "GymTarget", { fg = "#ff007c", bold = true })
+  vim.api.nvim_set_hl(0, "GymHud", { fg = "#00ff00", bold = true })
+  
+  -- Create Board
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
-  
-  -- Create a large arena
+  local width = 60
+  local height = 20
   local lines = {}
-  for i=1, 20 do table.insert(lines, string.rep(" ", 60)) end
+  for i=1, height do table.insert(lines, string.rep(" ", width)) end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   
-  -- Helper to spawn target
-  local function spawn_target()
-    -- Clear old target (redraw board)
-    for i=1, 20 do lines[i] = string.rep(" ", 60) end
-    
-    -- Random pos (lines 1-20, cols 0-59)
-    local r = math.random(1, 20)
-    local c = math.random(0, 59)
-    
-    -- Inject X
-    lines[r] = string.sub(lines[r], 1, c) .. "X" .. string.sub(lines[r], c+2)
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-    
-    return r, c
+  -- Create HUD Window
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor",
+    width = 20,
+    height = 3,
+    col = ui.width - 22,
+    row = 1,
+    style = "minimal",
+    border = "rounded"
+  })
+
+  local function update_hud(remaining)
+    if not vim.api.nvim_buf_is_valid(hud_buf) then return end
+    vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {
+      "SCORE: " .. score,
+      "COMBO: x" .. combo .. (combo > 1 and " 🔥" or ""),
+      "TIME : " .. remaining .. "s"
+    })
   end
 
-  local target_r, target_c = spawn_target()
-  vim.api.nvim_win_set_cursor(0, {10, 30}) -- Start in middle
+  -- Target Logic
+  local target_r, target_c
+  local target_char = ""
+  
+  local function spawn_target()
+    -- Clear board
+    for i=1, height do lines[i] = string.rep(" ", width) end
+    
+    -- Pick randoms
+    target_r = math.random(1, height)
+    target_c = math.random(0, width - 2)
+    target_char = targets[math.random(#targets)]
+    
+    -- Inject Target
+    -- Note: Emojis can take multiple bytes, simplified for now
+    lines[target_r] = string.sub(lines[target_r], 1, target_c) .. target_char .. string.sub(lines[target_r], target_c+2)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    
+    -- Add Highlight (using matchaddpos for simplicity)
+    vim.fn.clearmatches()
+    vim.fn.matchaddpos("GymTarget", {{target_r, target_c+1}})
+  end
 
-  print("Crawler Arcade: Use hjkl to hit 'X'. You have " .. time_limit .. "s! GO!")
+  spawn_target()
+  vim.api.nvim_win_set_cursor(0, {height/2, width/2}) 
+  
+  print("START! Chase the monsters! (Use hjkl)")
 
-  -- Game Loop / Input Check
+  -- Game Loop
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = buf,
     callback = function()
       if not running then return true end
       
-      -- Check timer
+      -- Time Logic
       local elapsed = os.time() - start_time
       local remaining = time_limit - elapsed
       
       if remaining <= 0 then
         running = false
-        print("⏰ TIME'S UP! Final Score: " .. score .. " hits.")
+        vim.api.nvim_win_close(hud_win, true)
+        print("🎉 GAME OVER! Final Score: " .. score)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
-          "GAME OVER",
-          "Score: " .. score,
-          "Press q to quit"
+          "   GAME OVER   ",
+          "   Final Score: " .. score,
+          "   Max Combo: x" .. combo,
+          "",
+          "   Press q to quit"
         })
         vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
         return true
       end
-
-      -- Check collision
+      
+      -- Combo Decay (reset if > 2s since last hit)
+      if os.time() - combo_timer > 2 and combo > 1 then
+        combo = 1
+      end
+      
+      -- Collision Logic
       local cursor = vim.api.nvim_win_get_cursor(0)
       local r, c = cursor[1], cursor[2]
       
-      if r == target_r and c == target_c then
-        score = score + 1
-        target_r, target_c = spawn_target()
-        print("Score: " .. score .. " | Time: " .. remaining .. "s")
+      -- Loosen collision detection for emojis (they can involve next col)
+      if r == target_r and (c == target_c or c == target_c + 1) then
+        score = score + (10 * combo)
+        combo = combo + 1
+        combo_timer = os.time()
+        spawn_target()
       end
+      
+      update_hud(remaining)
     end
   })
   
-  -- Disable cheats
+  -- Controls
   local opts = { buffer = buf }
   for _, key in ipairs({"<Up>", "<Down>", "<Left>", "<Right>"}) do
     vim.keymap.set("n", key, "<nop>", opts)
   end
-  vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
+  vim.keymap.set("n", "q", function() 
+    running = false
+    vim.api.nvim_win_close(hud_win, true)
+    vim.cmd("bd!") 
+  end, opts)
 end
 
 -- Level 2: The Sprinter (Placeholder for now)
