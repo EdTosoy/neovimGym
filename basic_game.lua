@@ -48,6 +48,39 @@ function M.start()
   vim.opt_local.buftype = "nofile"
 end
 
+local function show_game_over(buf, score, restart_cb, next_cb)
+  local lines = {
+    "   🎉 GAME OVER! 🎉",
+    "",
+    "   Final Score: " .. score,
+    "",
+    "   [r] Restart Level",
+    "   [n] Next Level",
+    "   [m] Main Menu",
+    "   [q] Quit"
+  }
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.opt_local.modifiable = false
+  
+  local opts = { buffer = buf }
+  vim.keymap.set("n", "r", function() 
+    vim.cmd("bd!")
+    restart_cb() 
+  end, opts)
+  
+  vim.keymap.set("n", "n", function() 
+    vim.cmd("bd!")
+    if next_cb then next_cb() else print("No next level!") end
+  end, opts)
+  
+  vim.keymap.set("n", "m", function()
+    vim.cmd("bd!")
+    require("nvim-gym").open_menu()
+  end, opts)
+  
+  vim.keymap.set("n", "q", ":bd!<CR>", opts)
+end
+
 -- Level 1: The Crawler (Gamified Arcade)
 function M.level_crawler()
   -- Game State
@@ -138,15 +171,10 @@ function M.level_crawler()
       if remaining <= 0 then
         running = false
         vim.api.nvim_win_close(hud_win, true)
+        running = false
+        vim.api.nvim_win_close(hud_win, true)
         print("🎉 GAME OVER! Final Score: " .. score)
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
-          "   GAME OVER   ",
-          "   Final Score: " .. score,
-          "   Max Combo: x" .. combo,
-          "",
-          "   Press q to quit"
-        })
-        vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
+        show_game_over(buf, score, M.level_crawler, M.level_sprinter)
         return true
       end
       
@@ -180,6 +208,7 @@ function M.level_crawler()
     running = false
     vim.api.nvim_win_close(hud_win, true)
     vim.cmd("bd!") 
+    require("nvim-gym").open_menu() -- Return to menu logic
   end, opts)
 end
 
