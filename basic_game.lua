@@ -48,51 +48,82 @@ function M.start()
   vim.opt_local.buftype = "nofile"
 end
 
--- Level 1: The Crawler
+-- Level 1: The Crawler (Arcade Mode)
 function M.level_crawler()
+  local score = 0
+  local time_limit = 30
   local start_time = os.time()
+  local running = true
+
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
   
-  local maze = {
-    "START HERE -> ####################",
-    "              #                  #",
-    "              #  ########  ####  #",
-    "              #  #      #  #  #  #",
-    "              #  #  ##  #  #  #  #",
-    "              #  #  #   #     #  #",
-    "              #  ####   #######  #",
-    "              #                  #",
-    "              #################### -> GOAL (Place cursor on X)",
-    "                                      X"
-  }
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, maze)
-  vim.api.nvim_win_set_cursor(0, {1, 0})
+  -- Create a large arena
+  local lines = {}
+  for i=1, 20 do table.insert(lines, string.rep(" ", 60)) end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   
-  print("Use h, j, k, l to move. Reach the X! Timer started...")
-  
-  -- Disable arrow keys to force hjkl
-  local opts = { buffer = buf }
-  vim.keymap.set("n", "<Up>", "<nop>", opts)
-  vim.keymap.set("n", "<Down>", "<nop>", opts)
-  vim.keymap.set("n", "<Left>", "<nop>", opts)
-  vim.keymap.set("n", "<Right>", "<nop>", opts)
+  -- Helper to spawn target
+  local function spawn_target()
+    -- Clear old target (redraw board)
+    for i=1, 20 do lines[i] = string.rep(" ", 60) end
+    
+    -- Random pos (lines 1-20, cols 0-59)
+    local r = math.random(1, 20)
+    local c = math.random(0, 59)
+    
+    -- Inject X
+    lines[r] = string.sub(lines[r], 1, c) .. "X" .. string.sub(lines[r], c+2)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    
+    return r, c
+  end
 
-  -- Check position
+  local target_r, target_c = spawn_target()
+  vim.api.nvim_win_set_cursor(0, {10, 30}) -- Start in middle
+
+  print("Crawler Arcade: Use hjkl to hit 'X'. You have " .. time_limit .. "s! GO!")
+
+  -- Game Loop / Input Check
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = buf,
     callback = function()
-      local cursor = vim.api.nvim_win_get_cursor(0)
-      local row, col = cursor[1], cursor[2]
-      -- Goal is at last line, last char
-      if row == #maze and col >= #maze[#maze]-1 then
-        local elapsed = os.time() - start_time
-        print("🎉 VICTORY! Time: " .. elapsed .. "s. Press q to quit.")
+      if not running then return true end
+      
+      -- Check timer
+      local elapsed = os.time() - start_time
+      local remaining = time_limit - elapsed
+      
+      if remaining <= 0 then
+        running = false
+        print("⏰ TIME'S UP! Final Score: " .. score .. " hits.")
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+          "GAME OVER",
+          "Score: " .. score,
+          "Press q to quit"
+        })
         vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
-        return true -- delete autocmd
+        return true
+      end
+
+      -- Check collision
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local r, c = cursor[1], cursor[2]
+      
+      if r == target_r and c == target_c then
+        score = score + 1
+        target_r, target_c = spawn_target()
+        print("Score: " .. score .. " | Time: " .. remaining .. "s")
       end
     end
   })
+  
+  -- Disable cheats
+  local opts = { buffer = buf }
+  for _, key in ipairs({"<Up>", "<Down>", "<Left>", "<Right>"}) do
+    vim.keymap.set("n", key, "<nop>", opts)
+  end
+  vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
 end
 
 -- Level 2: The Sprinter (Placeholder for now)

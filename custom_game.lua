@@ -47,8 +47,13 @@ function M.start()
   vim.opt_local.buftype = "nofile"
 end
 
--- Level 1: Window Hopper
+-- Level 1: Window Hopper (Arcade Mode)
 function M.level_window_hopper()
+  local score = 0
+  local time_limit = 45 -- Slightly longer for window jumps
+  local start_time = os.time()
+  local running = true
+  
   -- Close other windows first
   vim.cmd("only")
   
@@ -59,32 +64,80 @@ function M.level_window_hopper()
   vim.cmd("wincmd j")
   vim.cmd("vsplit")
   vim.cmd("wincmd j")
-  vim.cmd("vsplit") -- Rough grid
-
-  -- Pick a target window
-  local wins = vim.api.nvim_list_wins()
-  local target_win = wins[math.random(#wins)]
+  vim.cmd("vsplit") 
   
+  -- Setup buffers for all windows
+  local wins = vim.api.nvim_list_wins()
+  local bufs = {}
   for _, win in ipairs(wins) do
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_win_set_buf(win, buf)
-    if win == target_win then
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {"", "   GO HERE!   ", "   (Use C-h/j/k/l)   "})
-      -- Win condition
-      vim.api.nvim_create_autocmd("WinEnter", {
-        callback = function()
-          if vim.api.nvim_get_current_win() == target_win then
-            print("🎉 Nice moves! Press q to quit.")
-            vim.cmd("only") -- Clean up
-            return true -- Delete autocmd
-          end
-        end
-      })
-    else
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {"", "   .   "})
+    bufs[win] = buf
+  end
+
+  local function pick_new_target()
+    local current = vim.api.nvim_get_current_win()
+    local candidates = {}
+    for _, w in ipairs(wins) do
+      if w ~= current then table.insert(candidates, w) end
+    end
+    print(#candidates)
+    return candidates[math.random(#candidates)]
+  end
+  
+  local target_win = pick_new_target()
+  
+  local function update_ui(remaining)
+    for _, win in ipairs(wins) do
+      local buf = bufs[win]
+      if win == target_win then
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+          "   🎯 TARGET 🎯",
+          "   (Jump Here!)",
+          "",
+          "Score: " .. score,
+          "Time: " .. remaining .. "s"
+        })
+        -- Highlight it? maybe later
+      else
+         vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+           "   .",
+           "",
+           "",
+           "Score: " .. score
+         })
+      end
     end
   end
-  print("Use <C-h/j/k/l> to jump to the target!")
+  
+  update_ui(time_limit)
+  print("Use <C-h/j/k/l> to catch the target window!")
+
+  -- Game Loop
+  vim.api.nvim_create_autocmd("WinEnter", {
+    callback = function()
+      if not running then return true end
+      
+      local elapsed = os.time() - start_time
+      local remaining = time_limit - elapsed
+      
+      if remaining <= 0 then
+        running = false
+        print("⏰ TIME'S UP! Final Score: " .. score)
+        vim.cmd("only") -- Reset layout
+        return true
+      end
+      
+      if vim.api.nvim_get_current_win() == target_win then
+        score = score + 1
+        target_win = pick_new_target()
+        update_ui(remaining)
+        print("Nice! Score: " .. score)
+      end
+      
+      update_ui(remaining)
+    end
+  })
 end
 
 -- Level 2: Window Shaper
