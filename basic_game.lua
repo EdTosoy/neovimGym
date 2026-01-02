@@ -212,33 +212,266 @@ function M.level_crawler()
   end, opts)
 end
 
--- Level 2: The Sprinter (Placeholder for now)
+-- Level 2: The Sprinter
 function M.level_sprinter()
-  M.level_template("Use w, b, $, 0 to jump around words.", {
-    "word1 word2 word3 word4 word5",
-    "Jump to the end of the line ($)",
-    "Jump to the start of the line (0)",
-    "word word word word word word",
+  local score = 0
+  local time_limit = 30
+  local start_time = os.time()
+  local running = true
+  
+  -- Word bank
+  local words = {"neovim", "motion", "buffer", "window", "lua", "plugin", "macro", "visual", "yank", "paste", "delete", "change", "insert", "append", "line", "column", "quickfix"}
+  
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  
+  -- Create HUD (reuse logic? simpler to inline for now)
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor", width = 20, height = 3, col = ui.width - 22, row = 1, style = "minimal", border = "rounded"
   })
+  
+  local function update_hud(remaining)
+    if not vim.api.nvim_buf_is_valid(hud_buf) then return end
+    vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {"SCORE: " .. score, "TIME : " .. remaining .. "s", ""})
+  end
+
+  -- Highlight setup
+  vim.api.nvim_set_hl(0, "GymTargetWord", { fg = "#00ffff", bold = true, underline = true })
+
+  local sentences = {}
+  local target_word = ""
+  local target_pos = {1, 0} -- row, col
+  
+  local function generate_level()
+    sentences = {}
+    for i=1, 15 do
+      local line = ""
+      for j=1, 8 do line = line .. words[math.random(#words)] .. " " end
+      table.insert(sentences, line)
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, sentences)
+    
+    -- Pick target
+    local r = math.random(1, 15)
+    local line_text = sentences[r]
+    -- Find a word start
+    local attempts = 0
+    while attempts < 50 do
+        local w_idx = math.random(1, #words) -- Random word index from bank IS NOT enough, we need position in line
+        -- Simplified: Pick a random space and next word
+        local space_indices = {}
+        local current_pos = 0
+        while true do
+            local found = string.find(line_text, " ", current_pos + 1)
+            if not found then break end
+            table.insert(space_indices, found)
+            current_pos = found
+        end
+        
+        if #space_indices > 0 then
+           local rnd_space = space_indices[math.random(#space_indices)]
+           target_pos = {r, rnd_space} -- Actually char after space is better, but simplified
+           -- Let's just highlight a range
+           vim.fn.clearmatches()
+           vim.fn.matchaddpos("GymTargetWord", {{r, rnd_space + 1, 5}}) -- Highlight 5 chars
+           break
+        end
+        attempts = attempts + 1
+    end
+  end
+  
+  generate_level()
+  print("Jump to the BLUE words using w, b, f, t!")
+
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+      if not running then return true end
+      local elapsed = os.time() - start_time
+      local remaining = time_limit - elapsed
+      
+      if remaining <= 0 then
+        running = false
+        vim.api.nvim_win_close(hud_win, true)
+        show_game_over(buf, score, M.level_sprinter, M.level_editor)
+        return true
+      end
+      
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      -- Simple collision: if cursor line is correct and within range of highlight
+      if cursor[1] == target_pos[1] and math.abs(cursor[2] - target_pos[2]) < 5 then
+        score = score + 1
+        generate_level()
+      end
+      
+      update_hud(remaining)
+    end
+  })
+  
+  vim.keymap.set("n", "q", function() running = false; vim.cmd("bd!"); require("nvim-gym").open_menu() end, { buffer = buf })
 end
 
 -- Level 3: The Editor
 function M.level_editor()
-  M.level_template("Fix the typos. delete (x), insert (i), delete line (dd)", {
-    "Thhis line haas extra letters. (Use x)",
-    "This line is missing lettrs. (Use i)",
-    "DELETE THIS JAR JAR BINKS LINE (Use dd)",
-    "Perfect line."
+  local score = 0
+  local time_limit = 45
+  local start_time = os.time()
+  local running = true
+  
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor", width = 20, height = 3, col = ui.width - 22, row = 1, style = "minimal", border = "rounded"
   })
+  local function update_hud(remaining)
+     if vim.api.nvim_buf_is_valid(hud_buf) then
+        vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {"SCORE: " .. score, "TIME : " .. remaining .. "s", ""})
+     end
+  end
+
+  local function generate_lines()
+      local t = math.random(1, 3)
+      if t == 1 then
+         return {"Fix thhis.", "Fix this.", "Use x"}
+      elseif t == 2 then
+         return {"BAD LINE", "", "Use dd"}
+      else
+         return {"Open .", "Open sesame.", "Use a/i to add 'sesame'"}
+      end
+  end
+  local current_target = ""
+  
+  local function spawn()
+     local data = generate_lines()
+     local text = data[1]
+     current_target = data[2]
+     local hint = data[3]
+     
+     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "Hint: " .. hint,
+        "",
+        text, 
+     })
+  end
+  spawn()
+
+  vim.api.nvim_create_autocmd({"TextChanged", "CursorMoved"}, {
+    buffer = buf,
+    callback = function()
+       if not running then return true end
+       local elapsed = os.time() - start_time
+       local remaining = time_limit - elapsed
+       
+       if remaining <= 0 then
+         running = false
+         vim.api.nvim_win_close(hud_win, true)
+         show_game_over(buf, score, M.level_editor, M.level_surgeon)
+         return true
+       end
+       
+       update_hud(remaining)
+       
+       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+       if current_target == "" then 
+          if #lines < 3 or lines[3] == nil or lines[3] == "" then
+             score = score + 1
+             spawn()
+          end
+       else 
+          if #lines >= 3 and lines[3] == current_target then
+             score = score + 1
+             spawn()
+          end
+       end
+    end
+  })
+  
+  vim.keymap.set("n", "q", function() running = false; vim.cmd("bd!"); require("nvim-gym").open_menu() end, { buffer = buf })
 end
 
 -- Level 4: The Surgeon
 function M.level_surgeon()
-  M.level_template("Advanced Editing. Change Inner Quotes (ci\")", {
-    "local name = \"change_me_please\"",
-    "local config = \"wrong_value\"",
-    "Change the values inside the quotes using ci\""
+  local score = 0
+  local time_limit = 60
+  local start_time = os.time()
+  local running = true
+  
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buf)
+  
+  -- HUD logic
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor", width = 20, height = 3, col = ui.width - 22, row = 1, style = "minimal", border = "rounded"
   })
+  local function update_hud(remaining)
+     if vim.api.nvim_buf_is_valid(hud_buf) then
+        vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {"SCORE: " .. score, "TIME : " .. remaining .. "s", ""})
+     end
+  end
+
+  local bank = {
+    { q = 'local name = "bad_name"', a = 'local name = "good_name"', hint = "Change inside quotes to 'good_name'" },
+    { q = 'print("wrong_msg")', a = 'print("hello_world")', hint = "Change to 'hello_world'" },
+    { q = 'return "fail"', a = 'return "success"', hint = "Change to 'success'" }
+  }
+  
+  local current_target = ""
+  
+  local function spawn()
+     local task = bank[math.random(#bank)]
+     current_target = task.a
+     
+     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "Instructions: " .. task.hint,
+        "",
+        task.q, 
+     })
+  end
+  spawn()
+
+  vim.api.nvim_create_autocmd({"TextChanged", "TextChangedI"}, {
+    buffer = buf,
+    callback = function()
+       if not running then return true end
+       local elapsed = os.time() - start_time
+       local remaining = time_limit - elapsed
+       
+       if remaining <= 0 then
+         running = false
+         vim.api.nvim_win_close(hud_win, true)
+         show_game_over(buf, score, M.level_surgeon, nil)
+         return true
+       end
+       
+       update_hud(remaining)
+       
+       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+       if #lines >= 3 and lines[3] == current_target then
+          score = score + 1
+          spawn()
+       end
+    end
+  })
+  
+  -- Simple controls update
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+       if running then 
+          local elapsed = os.time() - start_time
+          update_hud(time_limit - elapsed)
+       end
+    end
+  })
+
+  vim.keymap.set("n", "q", function() running = false; vim.cmd("bd!"); require("nvim-gym").open_menu() end, { buffer = buf })
 end
 
 function M.level_template(instructions, lines)

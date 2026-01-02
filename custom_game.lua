@@ -47,6 +47,39 @@ function M.start()
   vim.opt_local.buftype = "nofile"
 end
 
+local function show_game_over(buf, score, restart_cb, next_cb)
+  local lines = {
+    "   🎉 GAME OVER! 🎉",
+    "",
+    "   Final Score: " .. score,
+    "",
+    "   [r] Restart Level",
+    "   [n] Next Level",
+    "   [m] Main Menu",
+    "   [q] Quit"
+  }
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.opt_local.modifiable = false
+  
+  local opts = { buffer = buf }
+  vim.keymap.set("n", "r", function() 
+    vim.cmd("bd!")
+    restart_cb() 
+  end, opts)
+  
+  vim.keymap.set("n", "n", function() 
+    vim.cmd("bd!")
+    if next_cb then next_cb() else print("No next level!") end
+  end, opts)
+  
+  vim.keymap.set("n", "m", function()
+    vim.cmd("bd!")
+    require("nvim-gym").open_menu()
+  end, opts)
+  
+  vim.keymap.set("n", "q", ":bd!<CR>", opts)
+end
+
 -- Level 1: Window Hopper (Arcade Mode)
 function M.level_window_hopper()
   local score = 0
@@ -125,6 +158,11 @@ function M.level_window_hopper()
         running = false
         print("⏰ TIME'S UP! Final Score: " .. score)
         vim.cmd("only") -- Reset layout
+        
+        -- Create a clean result buffer
+        local res_buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(res_buf)
+        show_game_over(res_buf, score, M.level_window_hopper, M.level_window_shaper)
         return true
       end
       
@@ -151,42 +189,194 @@ function M.level_window_shaper()
     "Resize this window using:",
     "Ctrl + Arrow Keys",
     "",
-    "Make it WIDER!"
+    "Make it WIDER!",
+    "",
+    "When done, press:",
+    "[n] Next Level (Buffer Surfer)",
+    "[q] Quit"
   })
-  print("Use Ctrl+Arrows to resize. (Press q to quit)")
-  vim.keymap.set("n", "q", ":only<CR>", { buffer = buf })
+  print("Use Ctrl+Arrows to resize.")
+  local opts = { buffer = buf }
+  vim.keymap.set("n", "q", function() vim.cmd("only"); require("nvim-gym").open_menu() end, opts)
+  vim.keymap.set("n", "n", function() 
+    vim.cmd("only")
+    M.level_buffer_surfer()
+  end, opts)
 end
 
 -- Level 3: Buffer Surfer
 function M.level_buffer_surfer()
-  -- Create 10 buffers
-  for i = 1, 10 do
-    local buf = vim.api.nvim_create_buf(false, false)
-    vim.api.nvim_buf_set_name(buf, "Buffer_" .. i)
-    if i == 7 then
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {"THIS IS THE WINNER!", "You found it.", "Press q to quit."})
-    else
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {"Not this one...", "Use Shift+l (next) or Shift+h (prev)"})
-    end
-    vim.keymap.set("n", "q", ":%bd|bd#<CR>", { buffer = buf }) -- Close all
+  local score = 0
+  local time_limit = 45
+  local start_time = os.time()
+  local running = true
+  
+  -- Create HUD
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor", width = 20, height = 3, col = ui.width - 22, row = 1, style = "minimal", border = "rounded"
+  })
+  local function update_hud(remaining)
+     if vim.api.nvim_buf_is_valid(hud_buf) then
+        vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {"SCORE: " .. score, "TIME : " .. remaining .. "s", ""})
+     end
   end
-  vim.cmd("b 1")
-  print("Use <S-l> and <S-h> to surf buffers. Find Buffer 7!")
+
+  local buffers = {}
+  local labels = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"}
+  
+  -- Create buffers
+  for i, label in ipairs(labels) do
+     local b = vim.api.nvim_create_buf(false, true)
+     vim.api.nvim_buf_set_name(b, "Gym_" .. label)
+     vim.api.nvim_buf_set_lines(b, 0, -1, false, {
+        "   BUFFER: " .. label,
+        "",
+        "   Use Shift+L (next) / Shift+H (prev)",
+        "   Find the Target!" 
+     })
+     table.insert(buffers, b)
+     -- Bind quit
+     vim.keymap.set("n", "q", function() 
+        running = false
+        vim.cmd("bd!")
+        -- Cleanup all
+        for _, bf in ipairs(buffers) do 
+           if vim.api.nvim_buf_is_valid(bf) then vim.api.nvim_buf_delete(bf, {force=true}) end
+        end
+        require("nvim-gym").open_menu()
+     end, { buffer = b })
+  end
+  
+  -- Set all buffers to be listed? 
+  -- nvim_create_buf(listed, scratch) -> true, true?
+  -- Actually, `vim.api.nvim_create_buf(true, false)` creates a listed buffer.
+  -- My create_buf(false, true) creates unlisted scratch... might not work with bnext/bprev depending on config.
+  -- Let's try to set them listed.
+  for _, b in ipairs(buffers) do
+     vim.bo[b].buflisted = true
+  end
+  
+  -- Start at 1
+  vim.api.nvim_set_current_buf(buffers[1])
+  
+  local target_buf = buffers[math.random(#buffers)]
+  local target_name = labels[1] -- placeholder
+  
+  local function pick_target()
+     local idx = math.random(#buffers)
+     target_buf = buffers[idx]
+     target_name = labels[idx]
+     print("GO TO BUFFER: " .. target_name)
+  end
+  pick_target()
+  
+  vim.api.nvim_create_autocmd("BufEnter", {
+     callback = function()
+        if not running then return true end
+        local elapsed = os.time() - start_time
+        local remaining = time_limit - elapsed
+        
+        if remaining <= 0 then
+           running = false
+           vim.api.nvim_win_close(hud_win, true)
+           -- Cleanup buffers
+           for _, bf in ipairs(buffers) do 
+              if vim.api.nvim_buf_is_valid(bf) then vim.api.nvim_buf_delete(bf, {force=true}) end
+           end
+           
+           -- Show Game Over
+           local res_buf = vim.api.nvim_create_buf(false, true)
+           vim.api.nvim_set_current_buf(res_buf)
+           show_game_over(res_buf, score, M.level_buffer_surfer, M.level_mover)
+           return true
+        end
+        
+        update_hud(remaining)
+        
+        if vim.api.nvim_get_current_buf() == target_buf then
+           score = score + 1
+           -- Show success msg?
+           pick_target()
+           -- Force redraw of message on current buffer?
+           print("FOUND IT! Next: " .. target_name)
+        end
+     end
+  })
 end
 
 -- Level 4: The Mover
 function M.level_mover()
-  local lines = {
-    "1. Step One",
-    "3. Step Three (WRONG PLACE)",
-    "2. Step Two",
-    "4. Step Four"
-  }
+  local score = 0
+  local time_limit = 45
+  local start_time = os.time()
+  local running = true
+  
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  print("Use Visual Mode (v) then J or K to reorder the list correctly.")
-  vim.keymap.set("n", "q", ":bd!<CR>", { buffer = buf })
+  
+  local hud_buf = vim.api.nvim_create_buf(false, true)
+  local ui = vim.api.nvim_list_uis()[1]
+  local hud_win = vim.api.nvim_open_win(hud_buf, false, {
+    relative = "editor", width = 20, height = 3, col = ui.width - 22, row = 1, style = "minimal", border = "rounded"
+  })
+  local function update_hud(remaining)
+     if vim.api.nvim_buf_is_valid(hud_buf) then
+        vim.api.nvim_buf_set_lines(hud_buf, 0, -1, false, {"SCORE: " .. score, "TIME : " .. remaining .. "s", ""})
+     end
+  end
+
+  local function spawn()
+     local correct = {"1. Step One", "2. Step Two", "3. Step Three", "4. Step Four", "5. Step Five"}
+     -- Shuffle
+     local shuffled = {unpack(correct)}
+     for i = #shuffled, 2, -1 do
+        local j = math.random(i)
+        shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+     end
+     
+     vim.api.nvim_buf_set_lines(buf, 0, -1, false, shuffled)
+     print("Sort lines 1-5 using Visual Mode + J/K!")
+  end
+  spawn()
+  
+  local correct_str = "1. Step One2. Step Two3. Step Three4. Step Four5. Step Five"
+
+  vim.api.nvim_create_autocmd({"TextChanged", "TextChangedI"}, {
+    buffer = buf,
+    callback = function()
+       if not running then return true end
+       local elapsed = os.time() - start_time
+       local remaining = time_limit - elapsed
+       
+       if remaining <= 0 then
+         running = false
+         vim.api.nvim_win_close(hud_win, true)
+         show_game_over(buf, score, M.level_mover, nil)
+         return true
+       end
+       
+       update_hud(remaining)
+       
+       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+       local combined = table.concat(lines, "")
+       if combined == correct_str then
+          score = score + 1
+          spawn()
+          print("Perfect! Next round...")
+       end
+    end
+  })
+  
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = buf,
+    callback = function()
+       if running then update_hud(time_limit - (os.time() - start_time)) end
+    end
+  })
+
+  vim.keymap.set("n", "q", function() running = false; vim.cmd("bd!"); require("nvim-gym").open_menu() end, { buffer = buf })
 end
 
 return M
